@@ -8,7 +8,7 @@ head_size = 16
 n_embed = 32
 block_size = 8
 batch_size = 64
-learning_rate = 0.00015
+learning_rate = 0.0002
 n_iters = 10000
 n_heads = 8
 
@@ -54,13 +54,36 @@ class Head(nn.Module):
         return out
     
 class MultiHeadAttention(nn.Module):
-    def __init__(self, block_size):
+    def __init__(self, block_size, head_size=head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(block_size) for _ in range(n_heads)])
         self.proj = nn.Linear(n_heads*head_size, n_embed)
     
     def forward(self,x):
         return self.proj(torch.cat([h(x) for h in self.heads], dim=-1))
+    
+class FeedForward(nn.Module):
+    def __init__(self, n_embed):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embed, 4*n_embed),
+            nn.GELU(),
+            nn.Linear(4*n_embed, n_embed)
+        )
+    
+    def forward(self,x):
+        return self.net(x)
+
+class Block(nn.Module):
+    def __init__(self, block_size):
+        super().__init__()
+        self.sa = MultiHeadAttention(block_size=block_size)
+        self.ff = FeedForward(n_embed)
+        
+    def forward(self,x):
+        x = self.sa(x)
+        x = self.ff(x)
+        return x
 
 class BigramLanguageModel(nn.Module):
     
@@ -71,17 +94,18 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
-        self.proj = nn.Linear(head_size, n_embed)
-        self.sa_head = Head(block_size=block_size // n_heads)
-        self.ma_head = MultiHeadAttention(block_size=block_size)
+        self.blocks = nn.Sequential(
+            Block(n_embed),
+            Block(n_embed),
+            Block(n_embed),
+        )
         
     def forward(self, idx, targets=None):
         # idx and targets are both (B,T) tensors of integers
         token_embeddings = self.token_embedding_table(idx) # (B,T,C)
         position_embeddings = self.position_embedding_table(torch.arange(idx.shape[1]))
         x = token_embeddings + position_embeddings
-        x = self.ma_head(x) # apply self attention head here
-        # x = self.proj(x)
+        x = self.blocks(x)
         logits = self.lm_head(x)
         
         if targets == None:
