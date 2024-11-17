@@ -8,7 +8,7 @@ head_size = 16
 n_embed = 32
 block_size = 8
 batch_size = 64
-learning_rate = 0.0002
+learning_rate = 0.00025
 n_iters = 10000
 n_heads = 8
 
@@ -79,10 +79,12 @@ class Block(nn.Module):
         super().__init__()
         self.sa = MultiHeadAttention(block_size=block_size)
         self.ff = FeedForward(n_embed)
+        self.ln1 = nn.LayerNorm(n_embed)
+        self.ln2 = nn.LayerNorm(n_embed)
         
     def forward(self,x):
-        x = self.sa(x)
-        x = self.ff(x)
+        x = x + self.sa(self.ln1(x))  # Apply skip connection and layer normalization
+        x = x + self.ff(self.ln2(x))  # Apply skip connection and layer normalization
         return x
 
 class BigramLanguageModel(nn.Module):
