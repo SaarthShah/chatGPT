@@ -5,12 +5,14 @@ import torch.nn.functional as F
 torch.manual_seed(1337)
 
 head_size = 16
-n_embed = 32
-block_size = 8
+n_embed = 384
+block_size = 256
 batch_size = 64
-learning_rate = 0.00025
+learning_rate = 0.0003
 n_iters = 10000
 n_heads = 8
+dropout = 0.2
+n_layers = 6
 
 # Reading and splittin the data into training and validation
 
@@ -41,6 +43,7 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embed, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size,block_size)))
         self.register_buffer('head_size', torch.tensor(head_size))
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self,x):
         B,T,C = x.shape
@@ -51,6 +54,7 @@ class Head(nn.Module):
         wei = F.softmax(wei, dim=-1)
         v = self.value(x)
         out = wei @ v
+        out = self.dropout(out)  # Apply dropout to the output
         return out
     
 class MultiHeadAttention(nn.Module):
@@ -58,9 +62,12 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(block_size) for _ in range(n_heads)])
         self.proj = nn.Linear(n_heads*head_size, n_embed)
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self,x):
-        return self.proj(torch.cat([h(x) for h in self.heads], dim=-1))
+        out = self.proj(torch.cat([h(x) for h in self.heads], dim=-1))
+        out = self.dropout(out)  # Apply dropout to the output
+        return out
     
 class FeedForward(nn.Module):
     def __init__(self, n_embed):
@@ -68,7 +75,8 @@ class FeedForward(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(n_embed, 4*n_embed),
             nn.GELU(),
-            nn.Linear(4*n_embed, n_embed)
+            nn.Linear(4*n_embed, n_embed),
+            nn.Dropout(dropout)  # Apply dropout in the feedforward network
         )
     
     def forward(self,x):
@@ -79,6 +87,7 @@ class Block(nn.Module):
         super().__init__()
         self.sa = MultiHeadAttention(block_size=block_size)
         self.ff = FeedForward(n_embed)
+        # we apply layernorm before it goes into the attention and feedforward
         self.ln1 = nn.LayerNorm(n_embed)
         self.ln2 = nn.LayerNorm(n_embed)
         
@@ -96,17 +105,15 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
-        self.blocks = nn.Sequential(
-            Block(n_embed),
-            Block(n_embed),
-            Block(n_embed),
-        )
+        self.blocks = nn.Sequential(*[Block(block_size) for _ in range(n_layers)])
+        self.dropout = nn.Dropout(dropout)
         
     def forward(self, idx, targets=None):
         # idx and targets are both (B,T) tensors of integers
         token_embeddings = self.token_embedding_table(idx) # (B,T,C)
         position_embeddings = self.position_embedding_table(torch.arange(idx.shape[1]))
         x = token_embeddings + position_embeddings
+        x = self.dropout(x)  # Apply dropout to the embeddings
         x = self.blocks(x)
         logits = self.lm_head(x)
         
