@@ -8,7 +8,9 @@ head_size = 16
 n_embed = 32
 block_size = 8
 batch_size = 64
-learning_rate = 0.0001
+learning_rate = 0.00015
+n_iters = 10000
+n_heads = 8
 
 # Reading and splittin the data into training and validation
 
@@ -50,10 +52,15 @@ class Head(nn.Module):
         v = self.value(x)
         out = wei @ v
         return out
-
-torch.manual_seed(1337)
-n_embed = 32
-block_size = 8
+    
+class MultiHeadAttention(nn.Module):
+    def __init__(self, block_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(block_size) for _ in range(n_heads)])
+        self.proj = nn.Linear(n_heads*head_size, n_embed)
+    
+    def forward(self,x):
+        return self.proj(torch.cat([h(x) for h in self.heads], dim=-1))
 
 class BigramLanguageModel(nn.Module):
     
@@ -65,15 +72,16 @@ class BigramLanguageModel(nn.Module):
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
         self.proj = nn.Linear(head_size, n_embed)
-        self.sa_head = Head(block_size=block_size)
+        self.sa_head = Head(block_size=block_size // n_heads)
+        self.ma_head = MultiHeadAttention(block_size=block_size)
         
     def forward(self, idx, targets=None):
         # idx and targets are both (B,T) tensors of integers
         token_embeddings = self.token_embedding_table(idx) # (B,T,C)
         position_embeddings = self.position_embedding_table(torch.arange(idx.shape[1]))
         x = token_embeddings + position_embeddings
-        x = self.sa_head(x) # apply self attention head here
-        x = self.proj(x)
+        x = self.ma_head(x) # apply self attention head here
+        # x = self.proj(x)
         logits = self.lm_head(x)
         
         if targets == None:
@@ -119,8 +127,8 @@ def get_batch(split):
 
 optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
 
-for steps in range(10000):
-    xb,yb = get_batch('train')
+for steps in range(n_iters):
+    xb, yb = get_batch('train')
     
     logits, loss = m(xb, yb)
     
@@ -129,5 +137,8 @@ for steps in range(10000):
     loss.backward()
     optimizer.step()
     
+    if steps % 1000 == 0:
+        print(f"Step {steps}, Loss: {loss.item()}")
+
 print(loss.item())
-print(decode(m.generate(idx, max_new_tokens = 100)[0].tolist()))
+print(decode(m.generate(idx, max_new_tokens = 1000)[0].tolist()))
